@@ -10,11 +10,15 @@
 #include "msgpack_errors.h"
 
 #include "msgpack/pack_define.h"
+
 #define msgpack_pack_user smart_str*
+
 #define msgpack_pack_inline_func(name) \
     static inline void msgpack_pack ## name
 #define msgpack_pack_inline_func_cint(name) \
     static inline void msgpack_pack ## name
+
+// 直接将buf中长度为len的数据添加到user后
 #define msgpack_pack_append_buffer(user, buf, len) \
     smart_str_appendl(user, (const void*)buf, len)
 
@@ -23,15 +27,21 @@
 static inline int msgpack_check_ht_is_map(zval *array) /* {{{ */ {
 	uint32_t count;
 
+	// 首先是ARRAY类型
 	ZEND_ASSERT(Z_TYPE_P(array) == IS_ARRAY);
 
 	count = zend_hash_num_elements(Z_ARRVAL_P(array));
 
+	// https://nikic.github.io/2012/03/28/Understanding-PHPs-internal-array-implementation.html
+	// map: array vs. map
+
+	// 1. 如果count != nNextFreeElement, 则表明array的key一定不是连续的，那么就一定是map
 	if (count != (Z_ARRVAL_P(array))->nNextFreeElement) {
 		return 1;
 	} else {
 		zend_string *key;
 
+		// 获取字符串形式的Key, 如果存在，则为map???
 		ZEND_HASH_FOREACH_STR_KEY(Z_ARRVAL_P(array), key) {
 			if (key) {
 				return 1;
@@ -42,6 +52,7 @@ static inline int msgpack_check_ht_is_map(zval *array) /* {{{ */ {
 }
 /* }}} */
 
+// “新增”新的数据，则返回1，否则返回0
 static inline int msgpack_var_add(HashTable *var_hash, zval *var, zend_long *var_old) /* {{{ */ {
 	uint32_t len;
 	char id[32], *p;
@@ -53,6 +64,7 @@ static inline int msgpack_var_add(HashTable *var_hash, zval *var, zend_long *var
 		var_noref = var;
 	}
 
+	// 根据var来计算hash
 	if ((Z_TYPE_P(var_noref) == IS_OBJECT) && Z_OBJCE_P(var_noref)) {
 		p = zend_print_long_to_buf(
 				id + sizeof(id) - 1,
@@ -67,8 +79,11 @@ static inline int msgpack_var_add(HashTable *var_hash, zval *var, zend_long *var
 		return 0;
 	}
 
+	// 根据hash来寻找var_exists
 	if (var_old && (var_exists = zend_hash_str_find(var_hash, p, len)) != NULL) {
 		*var_old = Z_LVAL_P(var_exists);
+
+		// 插入新的数据
 		if (!Z_ISREF_P(var)) {
 			ZVAL_LONG(&zv, -1);
 			zend_hash_next_index_insert(var_hash, &zv);
@@ -76,6 +91,7 @@ static inline int msgpack_var_add(HashTable *var_hash, zval *var, zend_long *var
 		return 0;
 	}
 
+	// 添加新的数据
 	ZVAL_LONG(&zv, zend_hash_num_elements(var_hash) + 1);
 	zend_hash_str_add(var_hash, p, len, &zv);
 
@@ -86,6 +102,7 @@ static inline int msgpack_var_add(HashTable *var_hash, zval *var, zend_long *var
 void msgpack_serialize_var_init(msgpack_serialize_data_t *var_hash) /* {{{ */ {
 	HashTable **var_hash_ptr = (HashTable **)var_hash;
 
+	// 直接利用: MSGPACK_G(serialize).var_hash 或者创建新的hashmap
 	if (MSGPACK_G(serialize).level) {
 		*var_hash_ptr = MSGPACK_G(serialize).var_hash;
 	} else {
@@ -93,6 +110,8 @@ void msgpack_serialize_var_init(msgpack_serialize_data_t *var_hash) /* {{{ */ {
 		zend_hash_init(*var_hash_ptr, 10, NULL, NULL, 0);
 		MSGPACK_G(serialize).var_hash = *var_hash_ptr;
 	}
+
+	// 增加引用计数
 	++MSGPACK_G(serialize).level;
 }
 /* }}} */
@@ -101,6 +120,7 @@ void msgpack_serialize_var_destroy(msgpack_serialize_data_t *var_hash) /* {{{ */
 	HashTable **var_hash_ptr = (HashTable **)var_hash;
 
 	--MSGPACK_G(serialize).level;
+	// 如果没有引用，则删除hash table
 	if (!MSGPACK_G(serialize).level) {
 		zend_hash_destroy(*var_hash_ptr);
 		FREE_HASHTABLE(*var_hash_ptr);
@@ -108,16 +128,21 @@ void msgpack_serialize_var_destroy(msgpack_serialize_data_t *var_hash) /* {{{ */
 }
 /* }}} */
 
+// 如何序列化字符串呢?
+// 1. 长度
+// 2. raw data
 inline static void msgpack_serialize_string(smart_str *buf, char *str, size_t len) /* {{{ */ {
 	msgpack_pack_raw(buf, len);
 	msgpack_pack_raw_body(buf, str, len);
 }
 /* }}} */
 
-static inline void msgpack_serialize_class(smart_str *buf, zval *val, zval *retval_ptr, HashTable *var_hash, char *class_name, uint32_t name_len, zend_bool incomplete_class) /* {{{ */ {
+// 如何序列化class呢?
+static inline void msgpack_serialize_class(smart_str *buf, zval *val,
+										   zval *retval_ptr, HashTable *var_hash,
+										   char *class_name, uint32_t name_len, zend_bool incomplete_class) /* {{{ */ {
 	uint32_t count;
 	HashTable *ht = HASH_OF(retval_ptr);
-
 	count = zend_hash_num_elements(ht);
 
 	if (incomplete_class) {
@@ -132,6 +157,7 @@ static inline void msgpack_serialize_class(smart_str *buf, zval *val, zval *retv
 		msgpack_pack_nil(buf);
 		msgpack_serialize_string(buf, class_name, name_len);
 
+		// 遍历hashtalbe
 		ZEND_HASH_FOREACH_STR_KEY_VAL(ht, key_str, value) {
 			if (incomplete_class && strcmp(ZSTR_VAL(key_str), MAGIC_MEMBER) == 0) {
 				continue;
@@ -148,13 +174,16 @@ static inline void msgpack_serialize_class(smart_str *buf, zval *val, zval *retv
 				}
 			}
 			if ((data = zend_hash_find(Z_OBJPROP_P(val), Z_STR_P(value))) != NULL) {
+				// 保存value
 				msgpack_serialize_string(buf, Z_STRVAL_P(value), Z_STRLEN_P(value));
+				// 保存data
 				msgpack_serialize_zval(buf, data, var_hash);
 			} else {
 				zval nval;
 				zend_class_entry *ce = Z_OBJCE_P(val);
 
 				ZVAL_NULL(&nval);
+
 				if (ce) {
 					zend_string *priv_name, *prot_name;
 					do {
@@ -190,6 +219,7 @@ static inline void msgpack_serialize_class(smart_str *buf, zval *val, zval *retv
 						msgpack_serialize_zval(buf, &nval, var_hash);
 					} while (0);
 				} else {
+					// key, null（如何处理null呢?)
 					msgpack_serialize_string(buf, Z_STRVAL_P(value), Z_STRLEN_P(value));
 					msgpack_serialize_zval(buf, &nval, var_hash);
 				}
@@ -199,7 +229,9 @@ static inline void msgpack_serialize_class(smart_str *buf, zval *val, zval *retv
 }
 /* }}} */
 
-static inline void msgpack_serialize_array(smart_str *buf, zval *val, HashTable *var_hash, zend_bool object, char* class_name, uint32_t name_len, zend_bool incomplete_class) /* {{{ */ {
+static inline void msgpack_serialize_array(smart_str *buf, zval *val,
+										   HashTable *var_hash, zend_bool object,
+										   char* class_name, uint32_t name_len, zend_bool incomplete_class) /* {{{ */ {
 	uint32_t n;
 	HashTable *ht;
 	zend_bool hash = 1;
@@ -210,6 +242,8 @@ static inline void msgpack_serialize_array(smart_str *buf, zval *val, HashTable 
 		val = Z_REFVAL_P(val);
 	}
 
+	// 如何处理一个array呢?
+	// object/array
 	if (object) {
 		ht = Z_OBJPROP_P(val);
 	} else {
@@ -223,6 +257,7 @@ static inline void msgpack_serialize_array(smart_str *buf, zval *val, HashTable 
 		n = 0;
 	}
 
+	// 如果是: incomplete_class, 则跳过一个元素
 	if (n > 0 && incomplete_class) {
 		--n;
 	}
@@ -230,17 +265,22 @@ static inline void msgpack_serialize_array(smart_str *buf, zval *val, HashTable 
 	if (object) {
 		if (MSGPACK_G(php_only)) {
 			if (is_ref) {
+				// 如何编码map呢?
 				msgpack_pack_map(buf, n + 2);
+
+				// 如何处理引用的问题呢?
+				// 1. <nil, reference>
 				msgpack_pack_nil(buf);
 				msgpack_pack_long(buf, MSGPACK_SERIALIZE_TYPE_REFERENCE);
 			} else {
 				msgpack_pack_map(buf, n + 1);
 			}
 
+			// 2. 输出class_name
 			msgpack_pack_nil(buf);
-
 			msgpack_serialize_string(buf, class_name, name_len);
 		} else {
+			// 输出array的长度
 			hash = 0;
 			msgpack_pack_array(buf, n);
 		}
@@ -248,26 +288,33 @@ static inline void msgpack_serialize_array(smart_str *buf, zval *val, HashTable 
 		hash = 0;
 		msgpack_pack_array(buf, n);
 	} else if (is_ref && MSGPACK_G(php_only)) {
+		// 非object, 引用模式的序列化
 		msgpack_pack_map(buf, n + 1);
 		msgpack_pack_nil(buf);
 		msgpack_pack_long(buf, MSGPACK_SERIALIZE_TYPE_REFERENCE);
 	} else if (!msgpack_check_ht_is_map(val)) {
+		// 数组模式
 		hash = 0;
 		msgpack_pack_array(buf, n);
 	} else {
+		// 一般的hashmap？
 		msgpack_pack_map(buf, n);
 	}
 
 	if (n > 0) {
+		// 如果hash为0，那么应该是普通的array?
 		if (object || hash) {
 			zend_string *key_str;
 			zend_ulong   key_long;
 			zval *value, *value_noref;
 
+			// 遍历object, hash
 			ZEND_HASH_FOREACH_KEY_VAL(ht, key_long, key_str, value) {
 				if (key_str && incomplete_class && strcmp(ZSTR_VAL(key_str), MAGIC_MEMBER) == 0) {
 					continue;
 				}
+
+				// 序列化key
 				if (key_str && hash) {
 					msgpack_serialize_string(buf, ZSTR_VAL(key_str), ZSTR_LEN(key_str));
 				} else if (hash) {
@@ -281,6 +328,7 @@ static inline void msgpack_serialize_array(smart_str *buf, zval *val, HashTable 
 				}
 
 				if ((Z_TYPE_P(value_noref) == IS_ARRAY && ZEND_HASH_GET_APPLY_COUNT(Z_ARRVAL_P(value_noref)) > 1)) {
+
 					msgpack_pack_nil(buf);
 				} else {
 					if (Z_TYPE_P(value_noref) == IS_ARRAY && ZEND_HASH_APPLY_PROTECTION(Z_ARRVAL_P(value_noref))) {
@@ -291,12 +339,14 @@ static inline void msgpack_serialize_array(smart_str *buf, zval *val, HashTable 
 						ZEND_HASH_DEC_APPLY_COUNT(Z_ARRVAL_P(value_noref));
 					}
 				}
+
 			} ZEND_HASH_FOREACH_END();
 		} else {
 			uint32_t i;
 			zval *data, *data_noref;
-
+			// 数组
 			for (i = 0; i < n; i++) {
+				// 序列化每一个数组元素
 				if ((data = zend_hash_index_find(ht, i)) == NULL || &data == &val ||
 						(Z_TYPE_P(data) == IS_ARRAY && ZEND_HASH_GET_APPLY_COUNT(Z_ARRVAL_P(data)) > 1)) {
 					msgpack_pack_nil(buf);
@@ -326,7 +376,9 @@ static inline void msgpack_serialize_array(smart_str *buf, zval *val, HashTable 
 }
 /* }}} */
 
-static inline void msgpack_serialize_object(smart_str *buf, zval *val, HashTable *var_hash, char* class_name, uint32_t name_len, zend_bool incomplete_class) /* {{{ */ {
+static inline void msgpack_serialize_object(smart_str *buf, zval *val,
+											HashTable *var_hash, char* class_name,
+											uint32_t name_len, zend_bool incomplete_class) /* {{{ */ {
 	int res;
 	zval retval, fname;
 	zval *val_noref;
@@ -412,7 +464,10 @@ void msgpack_serialize_zval(smart_str *buf, zval *val, HashTable *var_hash) /* {
 	}
 
 	if (MSGPACK_G(php_only) && var_hash && !msgpack_var_add(var_hash, val, &var_already)) {
+
+		// 如果val是指针
 		if (Z_ISREF_P(val)) {
+			// 处理array
 			if (Z_TYPE_P(Z_REFVAL_P(val)) == IS_ARRAY) {
 				msgpack_pack_map(buf, 2);
 
@@ -476,6 +531,7 @@ void msgpack_serialize_zval(smart_str *buf, zval *val, HashTable *var_hash) /* {
 		case IS_ARRAY:
 			msgpack_serialize_array(buf, val, var_hash, 0, NULL, 0, 0);
 			break;
+
 		case IS_OBJECT:
 			{
 				PHP_CLASS_ATTRIBUTES;

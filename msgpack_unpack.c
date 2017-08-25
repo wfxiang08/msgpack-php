@@ -61,6 +61,7 @@ typedef struct {
 
 #define MSGPACK_IS_STACK_VALUE(_v)   (Z_TYPE_P((zval *)(_v)) < IS_ARRAY)
 
+// 找到下一个可用的var_hash
 static zval *msgpack_var_push(msgpack_unserialize_data_t *var_hashx) /* {{{ */ {
     var_entries *var_hash, *prev = NULL;
 
@@ -70,12 +71,15 @@ static zval *msgpack_var_push(msgpack_unserialize_data_t *var_hashx) /* {{{ */ {
 
     var_hash = var_hashx->first;
 
+    // 如果var_hash用满了，则切换到下一个
     while (var_hash && var_hash->used_slots == VAR_ENTRIES_MAX) {
         prev = var_hash;
         var_hash = var_hash->next;
     }
 
+    // 添加到hash map中
     if (!var_hash) {
+        // 以var_entries为单位整体分配内存
         var_hash = emalloc(sizeof(var_entries));
         var_hash->used_slots = 0;
         var_hash->next = 0;
@@ -430,7 +434,8 @@ int msgpack_unserialize_false(msgpack_unserialize_data *unpack, zval **obj) /* {
 }
 /* }}} */
 
-int msgpack_unserialize_raw(msgpack_unserialize_data *unpack, const char* base, const char* data, unsigned int len, zval **obj) /* {{{ */ {
+int msgpack_unserialize_raw(msgpack_unserialize_data *unpack, const char* base,
+                            const char* data, unsigned int len, zval **obj) /* {{{ */ {
     MSGPACK_UNSERIALIZE_ALLOC_STACK(unpack);
 
 	if (len == 0) {
@@ -444,7 +449,8 @@ int msgpack_unserialize_raw(msgpack_unserialize_data *unpack, const char* base, 
 }
 /* }}} */
 
-int msgpack_unserialize_bin(msgpack_unserialize_data *unpack, const char* base, const char* data, unsigned int len, zval **obj) /* {{{ */ {
+int msgpack_unserialize_bin(msgpack_unserialize_data *unpack, const char* base,
+                            const char* data, unsigned int len, zval **obj) /* {{{ */ {
     MSGPACK_UNSERIALIZE_ALLOC_STACK(unpack);
 
 	ZVAL_STRINGL(*obj, data, len);
@@ -480,16 +486,19 @@ int msgpack_unserialize_array_item(msgpack_unserialize_data *unpack, zval **cont
 }
 /* }}} */
 
+// 反序列化map
 int msgpack_unserialize_map(msgpack_unserialize_data *unpack, unsigned int count, zval **obj) /* {{{ */ {
     MSGPACK_UNSERIALIZE_ALLOC_VALUE(unpack);
 
     if (count) {
+        // 记录数组元素个数
 		unpack->stack[unpack->deps++] = count;
 	}
 
     unpack->type = MSGPACK_SERIALIZE_TYPE_NONE;
 
     if (count == 0) {
+        // php_onlye 使用object 或 array(空数组)
         if (MSGPACK_G(php_only)) {
             object_init(*obj);
         } else {

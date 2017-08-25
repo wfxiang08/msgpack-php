@@ -657,6 +657,7 @@ msgpack_pack_inline_func(_double)(msgpack_pack_user x, double d)
 
 msgpack_pack_inline_func(_nil)(msgpack_pack_user x)
 {
+	// nil
 	static const unsigned char d = 0xc0;
 	msgpack_pack_append_buffer(x, &d, 1);
 }
@@ -668,12 +669,14 @@ msgpack_pack_inline_func(_nil)(msgpack_pack_user x)
 
 msgpack_pack_inline_func(_true)(msgpack_pack_user x)
 {
+	// true
 	static const unsigned char d = 0xc3;
 	msgpack_pack_append_buffer(x, &d, 1);
 }
 
 msgpack_pack_inline_func(_false)(msgpack_pack_user x)
 {
+	// false
 	static const unsigned char d = 0xc2;
 	msgpack_pack_append_buffer(x, &d, 1);
 }
@@ -685,14 +688,17 @@ msgpack_pack_inline_func(_false)(msgpack_pack_user x)
 
 msgpack_pack_inline_func(_array)(msgpack_pack_user x, unsigned int n)
 {
+	// 参考: https://github.com/msgpack/msgpack/blob/master/spec.md#formats-array
 	if (n < 16) {
 		unsigned char d = 0x90 | n;
 		msgpack_pack_append_buffer(x, &d, 1);
 	} else if(n < 65536) {
+		// array 16
 		unsigned char buf[3];
 		buf[0] = 0xdc; _msgpack_store16(&buf[1], (uint16_t)n);
 		msgpack_pack_append_buffer(x, buf, 3);
 	} else {
+		// array 32
 		unsigned char buf[5];
 		buf[0] = 0xdd; _msgpack_store32(&buf[1], (uint32_t)n);
 		msgpack_pack_append_buffer(x, buf, 5);
@@ -710,6 +716,8 @@ msgpack_pack_inline_func(_map)(msgpack_pack_user x, unsigned int n)
 		unsigned char d = 0x80 | n;
 		msgpack_pack_append_buffer(x, &TAKE8_8(d), 1);
 	} else if(n < 65536) {
+		// 0xde
+		// map 16
 		unsigned char buf[3];
 		buf[0] = 0xde; _msgpack_store16(&buf[1], (uint16_t)n);
 		msgpack_pack_append_buffer(x, buf, 3);
@@ -722,9 +730,8 @@ msgpack_pack_inline_func(_map)(msgpack_pack_user x, unsigned int n)
 
 
 /*
- * Raw
+ * Raw 如何序列化int呢?
  */
-
 msgpack_pack_inline_func(_raw)(msgpack_pack_user x, size_t l)
 {
 	TSRMLS_FETCH();
@@ -746,6 +753,8 @@ msgpack_pack_inline_func(_raw)(msgpack_pack_user x, size_t l)
 	}
 }
 
+// 如何序列化RAW Data呢?
+// 这里不考虑记下Raw Data的长度
 msgpack_pack_inline_func(_raw_body)(msgpack_pack_user x, const void* b, size_t l)
 {
 	msgpack_pack_append_buffer(x, (const unsigned char*)b, l);

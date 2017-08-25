@@ -495,14 +495,18 @@ static ZEND_METHOD(msgpack_unpacker, reset) /* {{{ */ {
 void msgpack_init_class() /* {{{ */ {
     zend_class_entry ce;
 
+    // 除了导出msgpack_pack, msgpack_unpack之外，还导出class形式的接口
     /* base */
     INIT_CLASS_ENTRY(ce, "MessagePack", msgpack_base_methods);
     msgpack_ce = zend_register_internal_class(&ce);
     msgpack_ce->create_object = php_msgpack_base_new;
+
     memcpy(&msgpack_handlers, zend_get_std_object_handlers(),sizeof msgpack_handlers);
     msgpack_handlers.offset = XtOffsetOf(php_msgpack_base_t, object);
     msgpack_handlers.free_obj = php_msgpack_base_free;
 
+    // 注册类常量
+    // setOption(MessagePack::OPT_PHPONLY, xxxx)
     zend_declare_class_constant_long(msgpack_ce, ZEND_STRS("OPT_PHPONLY") - 1, MSGPACK_CLASS_OPT_PHPONLY);
 
     /* unpacker */
@@ -510,6 +514,7 @@ void msgpack_init_class() /* {{{ */ {
     msgpack_unpacker_ce = zend_register_internal_class(&ce);
     msgpack_unpacker_ce->create_object = php_msgpack_unpacker_new;
     memcpy(&msgpack_unpacker_handlers, zend_get_std_object_handlers(),sizeof msgpack_unpacker_handlers);
+
     msgpack_unpacker_handlers.offset = XtOffsetOf(php_msgpack_unpacker_t, object);
     msgpack_handlers.free_obj = php_msgpack_unpacker_free;
 
